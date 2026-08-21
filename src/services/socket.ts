@@ -14,34 +14,17 @@ export function connectSocket(url: string): Socket {
 
   socket = io(url, {
     transports: ['websocket', 'polling'],
-    reconnection: true,
-    reconnectionDelay: 2000,
-    reconnectionDelayMax: 10000,
-    reconnectionAttempts: Infinity,
+    reconnection: false,
     forceNew: true,
   });
 
   socket.on('connect', () => {
     socket?.emit('admin:join');
     emit('connection_change', true);
-    emit('reconnect_attempt', 0);
   });
 
   socket.on('disconnect', () => {
     emit('connection_change', false);
-  });
-
-  socket.io.on('reconnect_attempt', (attempt) => {
-    emit('reconnect_attempt', attempt);
-  });
-
-  socket.io.on('reconnect_failed', () => {
-    emit('reconnect_failed', true);
-    setTimeout(() => {
-      if (socket && !socket.connected) {
-        socket.connect();
-      }
-    }, 3000);
   });
 
   const events = [

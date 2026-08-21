@@ -3,7 +3,6 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { DashboardLayout } from './components/layout/DashboardLayout';
 import { ConnectionGuard } from './components/layout/ConnectionGuard';
 import { CommandProgress } from './components/commands/CommandProgress';
-import { ReconnectOverlay } from './components/layout/ReconnectOverlay';
 import { ConnectionSetupPage } from './pages/ConnectionSetupPage';
 import { DevicesPage } from './pages/DevicesPage';
 import { DeviceDetailPage } from './pages/DeviceDetailPage';
@@ -48,7 +47,6 @@ function AppContent() {
         />
       </Routes>
       <CommandProgress />
-      <ReconnectOverlay />
     </BrowserRouter>
   );
 }

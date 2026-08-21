@@ -1,12 +1,10 @@
-import { useEffect, useRef } from 'react';
+import { useEffect } from 'react';
 import { connectSocket, disconnectSocket, onSocketEvent } from '../services/socket';
 import { useAppStore } from '../stores/useAppStore';
 import { configureApi, fetchKeysFromVercel, fetchServerUrlFromDb } from '../services/api';
 
 export function useConnection() {
-  const { settings, setConnected, setReconnecting, setReconnectAttempt, updateSettings } = useAppStore();
-  const failCount = useRef(0);
-  const lastFetchedUrl = useRef('');
+  const { settings, setConnected, updateSettings } = useAppStore();
 
   useEffect(() => {
     if (!settings.serverUrl) return;
@@ -18,41 +16,6 @@ export function useConnection() {
       onSocketEvent('connection_change', (v) => {
         const connected = v as boolean;
         setConnected(connected);
-        if (connected) {
-          setReconnecting(false);
-          setReconnectAttempt(0);
-          failCount.current = 0;
-        }
-      }),
-      onSocketEvent('reconnect_attempt', (attempt) => {
-        setReconnecting(true);
-        setReconnectAttempt(attempt as number);
-      }),
-      onSocketEvent('reconnect_failed', async () => {
-        failCount.current += 1;
-        setReconnectAttempt(-1);
-
-        try {
-          const keys = await fetchKeysFromVercel();
-          if (keys?.supabase_url && keys?.supabase_key) {
-            const newUrl = await fetchServerUrlFromDb(keys.supabase_url, keys.supabase_key);
-            if (newUrl && newUrl !== settings.serverUrl) {
-              lastFetchedUrl.current = newUrl;
-              updateSettings({ serverUrl: newUrl, supabaseKey: keys.supabase_key });
-              configureApi(newUrl, keys.supabase_key);
-              disconnectSocket();
-              connectSocket(newUrl);
-              return;
-            }
-          }
-        } catch {
-          // ignore
-        }
-
-        setTimeout(() => {
-          disconnectSocket();
-          connectSocket(settings.serverUrl);
-        }, 3000);
       }),
     ];
 
