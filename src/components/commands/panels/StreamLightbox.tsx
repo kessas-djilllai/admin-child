@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { X, Monitor, Camera, Radio, Maximize, Minimize } from 'lucide-react';
 import { initWebRTC, startWebRTCListener, stopWebRTCStream, cleanupWebRTC, watchDevice, setDeviceToken, type StreamType } from '../../../services/webrtc';
-import { sendCommand } from '../../../services/api';
 
 interface StreamLightboxProps {
   open: boolean;
@@ -49,10 +48,6 @@ export function StreamLightbox({ open, onClose, deviceToken, streamType, title }
 
     // Tell the child device that an admin is watching via WebRTC
     watchDevice(deviceToken);
-
-    // Send the stream command to start capturing on the child
-    const cmd = streamType === 'screen' ? 'stream_screen' : 'stream_camera_front';
-    sendCommand(deviceToken, cmd).catch(() => {});
 
     timeoutRef.current = setTimeout(() => {
       if (status === 'connecting') {
