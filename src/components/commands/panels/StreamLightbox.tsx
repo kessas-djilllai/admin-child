@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { X, Monitor, Camera, Radio, Maximize, Minimize } from 'lucide-react';
-import { initWebRTC, startWebRTCStream, stopWebRTCStream, cleanupWebRTC, type StreamType } from '../../../services/webrtc';
+import { initWebRTC, startWebRTCListener, stopWebRTCStream, cleanupWebRTC, type StreamType } from '../../../services/webrtc';
 
 interface StreamLightboxProps {
   open: boolean;
@@ -16,13 +16,14 @@ export function StreamLightbox({ open, onClose, deviceToken, streamType, title }
   const [status, setStatus] = useState<'connecting' | 'connected' | 'error' | 'stopped'>('connecting');
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
-  const unsubRef = useRef<(() => void) | null>(null);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (!open) {
       cleanupWebRTC();
       setStatus('connecting');
       setErrorMsg('');
+      if (timeoutRef.current) { clearTimeout(timeoutRef.current); timeoutRef.current = null; }
       return;
     }
 
@@ -34,20 +35,25 @@ export function StreamLightbox({ open, onClose, deviceToken, streamType, title }
           videoRef.current.srcObject = stream;
         }
       },
-      onConnected: () => setStatus('connected'),
+      onConnected: () => {
+        setStatus('connected');
+        if (timeoutRef.current) { clearTimeout(timeoutRef.current); timeoutRef.current = null; }
+      },
       onError: (err: string) => { setStatus('error'); setErrorMsg(err); },
       onDisconnected: () => setStatus('stopped'),
     });
 
-    startWebRTCStream(deviceToken, streamType).then((unsub: () => void) => {
-      unsubRef.current = unsub;
-    }).catch(() => {
-      setStatus('error');
-      setErrorMsg('فشل بدء الاتصال');
-    });
+    startWebRTCListener();
+
+    timeoutRef.current = setTimeout(() => {
+      if (status === 'connecting') {
+        setStatus('error');
+        setErrorMsg('หมดเวลาเชื่อมต่อ — تأكد أن الجهاز متصل');
+      }
+    }, 30000);
 
     return () => {
-      unsubRef.current?.();
+      if (timeoutRef.current) { clearTimeout(timeoutRef.current); timeoutRef.current = null; }
       stopWebRTCStream();
     };
   }, [open, deviceToken, streamType]);
@@ -74,7 +80,6 @@ export function StreamLightbox({ open, onClose, deviceToken, streamType, title }
 
   return (
     <div className="fixed inset-0 z-50 bg-black/95 flex flex-col">
-      {/* Top bar */}
       <div className="flex items-center justify-between px-4 py-3 shrink-0">
         <div className="flex items-center gap-3">
           <Icon size={18} className={status === 'connected' ? 'text-emerald-400' : 'text-surface-400'} />
@@ -101,7 +106,6 @@ export function StreamLightbox({ open, onClose, deviceToken, streamType, title }
         </div>
       </div>
 
-      {/* Video area */}
       <div ref={containerRef} className="flex-1 min-h-0 flex items-center justify-center px-4 pb-4" onClick={(e) => e.stopPropagation()}>
         <video
           ref={videoRef}
@@ -115,6 +119,7 @@ export function StreamLightbox({ open, onClose, deviceToken, streamType, title }
           <div className="flex flex-col items-center gap-4">
             <div className="w-16 h-16 border-4 border-primary border-t-transparent rounded-full animate-spin" />
             <p className="text-sm text-white/60">جاري الاتصال بالبث...</p>
+            <p className="text-xs text-white/30">تأكد أن الجهاز متصل بالإنترنت</p>
           </div>
         )}
 

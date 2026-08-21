@@ -1,13 +1,29 @@
-import { getSocket, onSocketEvent, sendCommandViaSocket } from './socket';
+import { sendCommandViaSocket, onSocketEvent } from './socket';
 
 let peerConnection: RTCPeerConnection | null = null;
-let localStream: MediaStream | null = null;
+let cleanupFns: (() => void)[] = [];
 
 const ICE_SERVERS: RTCConfiguration = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
+    {
+      urls: 'turn:openrelay.metered.ca:80',
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:443',
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    },
   ],
+  iceCandidatePoolSize: 10,
 };
 
 export type StreamType = 'screen' | 'camera';
@@ -26,18 +42,16 @@ export function initWebRTC(cbs: StreamCallbacks) {
 }
 
 export function cleanupWebRTC() {
+  cleanupFns.forEach((fn) => fn());
+  cleanupFns = [];
   if (peerConnection) {
     peerConnection.close();
     peerConnection = null;
   }
-  if (localStream) {
-    localStream.getTracks().forEach((t) => t.stop());
-    localStream = null;
-  }
   callbacks = null;
 }
 
-async function createPeerConnection(): Promise<RTCPeerConnection> {
+function createPeerConnection(): RTCPeerConnection {
   if (peerConnection) {
     peerConnection.close();
   }
@@ -78,51 +92,47 @@ async function createPeerConnection(): Promise<RTCPeerConnection> {
   return peerConnection;
 }
 
-export async function startWebRTCStream(deviceToken: string, streamType: StreamType) {
-  const pc = await createPeerConnection();
+export function startWebRTCListener() {
+  cleanupWebRTC();
 
-  pc.addTransceiver('recvonly', { direction: 'recvonly' });
+  const unsubOffer = onSocketEvent('webrtc:offer', async (data: unknown) => {
+    const d = data as { admin_socket?: string; sdp: string; type: string; stream_type?: string };
+    if (!d.sdp) return;
 
-  const offer = await pc.createOffer();
-  await pc.setLocalDescription(offer);
+    const pc = createPeerConnection();
 
-  sendCommandViaSocket('webrtc:offer', {
-    device_token: deviceToken,
-    sdp: offer.sdp,
-    type: offer.type,
-    stream_type: streamType,
-  });
+    await pc.setRemoteDescription(new RTCSessionDescription({ sdp: d.sdp, type: d.type as RTCSdpType }));
 
-  const unsubOffer = onSocketEvent('webrtc:answer', async (data: unknown) => {
-    const d = data as { sdp: string; type: RTCSdpType };
-    if (pc.signalingState === 'have-local-offer') {
-      await pc.setRemoteDescription(new RTCSessionDescription(d));
-    }
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+
+    sendCommandViaSocket('webrtc:answer', {
+      sdp: answer.sdp,
+      type: answer.type,
+    });
   });
 
   const unsubIce = onSocketEvent('webrtc:ice:remote', (data: unknown) => {
     const d = data as { candidate: RTCIceCandidateInit };
-    if (d.candidate && pc.remoteDescription) {
-      pc.addIceCandidate(new RTCIceCandidate(d.candidate)).catch(() => {});
+    if (d.candidate && peerConnection?.remoteDescription) {
+      peerConnection.addIceCandidate(new RTCIceCandidate(d.candidate)).catch(() => {});
     }
   });
 
-  return () => {
-    unsubOffer();
-    unsubIce();
-  };
+  const unsubStop = onSocketEvent('webrtc:stop', () => {
+    if (peerConnection) {
+      peerConnection.close();
+      peerConnection = null;
+      callbacks?.onDisconnected();
+    }
+  });
+
+  cleanupFns.push(unsubOffer, unsubIce, unsubStop);
 }
 
-export async function stopWebRTCStream() {
-  if (peerConnection) {
-    sendCommandViaSocket('webrtc:stop', {});
-    peerConnection.close();
-    peerConnection = null;
-  }
-  if (localStream) {
-    localStream.getTracks().forEach((t) => t.stop());
-    localStream = null;
-  }
+export function stopWebRTCStream() {
+  sendCommandViaSocket('webrtc:stop', {});
+  cleanupWebRTC();
 }
 
 export function getPeerConnection(): RTCPeerConnection | null {
