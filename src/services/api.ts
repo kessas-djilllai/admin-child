@@ -187,7 +187,19 @@ export async function fetchEmailAccounts(token: string): Promise<EmailAccount[]>
 
 export async function fetchMediaFiles(token: string, types?: string[]): Promise<MediaItem[]> {
   const params: Record<string, string> = { token };
-  if (types) params.file_type = types.join(',');
+  if (types) {
+    const sourceMap: Record<string, string[]> = {
+      screenshot: ['screenshot', 'لقطة شاشة'],
+      photo: ['photo', 'camera', 'صورة', 'كاميرا'],
+      video: ['video', 'فيديو'],
+      audio: ['audio', 'صوتي', 'تسجيل صوتي'],
+    };
+    const sources: string[] = [];
+    for (const t of types) {
+      sources.push(...(sourceMap[t] || [t]));
+    }
+    params.command_source = sources.join(',');
+  }
   const raw = await get<Record<string, unknown>[]>('/api/media_files', params);
   return raw.map((d) => ({
     id: String(d.id || ''),
