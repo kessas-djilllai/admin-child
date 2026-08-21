@@ -6,6 +6,7 @@ import { configureApi, fetchKeysFromVercel, fetchServerUrlFromDb } from '../serv
 export function useConnection() {
   const { settings, setConnected, setReconnecting, setReconnectAttempt, updateSettings } = useAppStore();
   const failCount = useRef(0);
+  const lastFetchedUrl = useRef('');
 
   useEffect(() => {
     if (!settings.serverUrl) return;
@@ -31,34 +32,27 @@ export function useConnection() {
         failCount.current += 1;
         setReconnectAttempt(-1);
 
-        if (failCount.current >= 3) {
-          failCount.current = 0;
-          try {
-            const keys = await fetchKeysFromVercel();
-            if (keys?.supabase_url && keys?.supabase_key) {
-              const newUrl = await fetchServerUrlFromDb(keys.supabase_url, keys.supabase_key);
-              if (newUrl && newUrl !== settings.serverUrl) {
-                updateSettings({ serverUrl: newUrl, supabaseKey: keys.supabase_key });
-                configureApi(newUrl, keys.supabase_key);
-                disconnectSocket();
-                connectSocket(newUrl);
-                return;
-              }
+        try {
+          const keys = await fetchKeysFromVercel();
+          if (keys?.supabase_url && keys?.supabase_key) {
+            const newUrl = await fetchServerUrlFromDb(keys.supabase_url, keys.supabase_key);
+            if (newUrl && newUrl !== settings.serverUrl) {
+              lastFetchedUrl.current = newUrl;
+              updateSettings({ serverUrl: newUrl, supabaseKey: keys.supabase_key });
+              configureApi(newUrl, keys.supabase_key);
+              disconnectSocket();
+              connectSocket(newUrl);
+              return;
             }
-          } catch {
-            // ignore
           }
-          // If no new URL found, retry current
-          setTimeout(() => {
-            disconnectSocket();
-            connectSocket(settings.serverUrl);
-          }, 3000);
-        } else {
-          setTimeout(() => {
-            disconnectSocket();
-            connectSocket(settings.serverUrl);
-          }, 3000);
+        } catch {
+          // ignore
         }
+
+        setTimeout(() => {
+          disconnectSocket();
+          connectSocket(settings.serverUrl);
+        }, 3000);
       }),
     ];
 

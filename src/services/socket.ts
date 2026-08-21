@@ -58,8 +58,10 @@ export function connectSocket(url: string): Socket {
     'stream:signal',
     'stream:data',
     'stream:binary',
+    'webrtc:offer',
     'webrtc:answer',
     'webrtc:ice:remote',
+    'webrtc:stop',
   ];
 
   for (const event of events) {
