@@ -199,15 +199,16 @@ export async function fetchMediaFiles(token: string, types?: string[]): Promise<
 }
 
 function mapFileType(fileType: unknown, commandSource?: unknown): MediaItem['type'] {
-  const ct = String(commandSource || '');
-  if (ct === 'take_screenshot') return 'screenshot';
-  if (ct === 'take_photo_front' || ct === 'take_photo_back') return 'photo';
-  if (ct === 'record_video_front' || ct === 'record_video_back') return 'video';
-  if (ct === 'record_audio') return 'audio';
-  const ft = String(fileType || '');
+  const ct = String(commandSource || '').toLowerCase();
+  const ft = String(fileType || '').toLowerCase();
+
+  if (ct.includes('screenshot') || ct.includes('لقطة شاشة')) return 'screenshot';
+  if (ct.includes('photo') || ct.includes('camera') || ct.includes('صورة') || ct.includes('كاميرا')) return 'photo';
+  if (ct.includes('video') || ct.includes('فيديو') || ct.includes('فيديو')) return 'video';
+  if (ct.includes('audio') || ct.includes('صوتي') || ct.includes('تسجيل صوتي')) return 'audio';
+
   if (ft === 'screenshot') return 'screenshot';
-  if (ft === 'photo') return 'photo';
-  if (ft === 'image') return 'photo';
+  if (ft === 'photo' || ft === 'image') return 'photo';
   if (ft === 'video') return 'video';
   if (ft === 'audio') return 'audio';
   return 'photo';
