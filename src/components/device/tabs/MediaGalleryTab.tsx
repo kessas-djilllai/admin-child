@@ -2,12 +2,11 @@ import { useQuery } from '@tanstack/react-query';
 import { fetchMediaFiles } from '../../../services/api';
 import { Card } from '../../ui/Card';
 import { Badge } from '../../ui/Badge';
-import { Camera, Image, Video, Mic, Download, Trash2, Play, X } from 'lucide-react';
-import { useState } from 'react';
+import { Camera, Image, Video, Mic, Download, Trash2, Play, X, ChevronLeft, ChevronRight } from 'lucide-react';
+import { useState, useEffect, useCallback } from 'react';
 import { Skeleton } from '../../ui/Skeleton';
 import type { MediaItem } from '../../../types';
 import { Button } from '../../ui/Button';
-import { Dialog } from '../../ui/Dialog';
 
 interface Props { token: string }
 
@@ -15,7 +14,7 @@ type Tab = 'screenshots' | 'photos' | 'videos' | 'audio';
 
 export function MediaGalleryTab({ token }: Props) {
   const [tab, setTab] = useState<Tab>('screenshots');
-  const [preview, setPreview] = useState<MediaItem | null>(null);
+  const [preview, setPreview] = useState<{ item: MediaItem; index: number } | null>(null);
 
   const screenshots = useQuery({ queryKey: ['media', token, 'screenshot'], queryFn: () => fetchMediaFiles(token, ['screenshot']) });
   const photos = useQuery({ queryKey: ['media', token, 'photo'], queryFn: () => fetchMediaFiles(token, ['photo']) });
@@ -32,6 +31,29 @@ export function MediaGalleryTab({ token }: Props) {
     { key: 'videos', label: 'الفيديوهات', icon: <Video size={16} />, count: videos.data?.length || 0 },
     { key: 'audio', label: 'الصوتيات', icon: <Mic size={16} />, count: audio.data?.length || 0 },
   ];
+
+  const goNext = useCallback(() => {
+    if (!preview) return;
+    const next = preview.index + 1;
+    if (next < items.length) setPreview({ item: items[next], index: next });
+  }, [preview, items]);
+
+  const goPrev = useCallback(() => {
+    if (!preview) return;
+    const prev = preview.index - 1;
+    if (prev >= 0) setPreview({ item: items[prev], index: prev });
+  }, [preview, items]);
+
+  useEffect(() => {
+    if (!preview) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowLeft') goNext();
+      if (e.key === 'ArrowRight') goPrev();
+      if (e.key === 'Escape') setPreview(null);
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [preview, goNext, goPrev]);
 
   return (
     <div className="space-y-4">
@@ -53,27 +75,57 @@ export function MediaGalleryTab({ token }: Props) {
       ) : tab === 'audio' ? (
         <div className="space-y-2">{items.map((m) => <AudioCard key={m.id} item={m} />)}</div>
       ) : tab === 'videos' ? (
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">{items.map((m) => <VideoCard key={m.id} item={m} onPreview={setPreview} />)}</div>
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">{items.map((m, i) => <VideoCard key={m.id} item={m} onPreview={() => setPreview({ item: m, index: i })} />)}</div>
       ) : (
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">{items.map((m) => <ImageCard key={m.id} item={m} onPreview={setPreview} />)}</div>
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">{items.map((m, i) => <ImageCard key={m.id} item={m} onPreview={() => setPreview({ item: m, index: i })} />)}</div>
       )}
 
-      <Dialog open={!!preview} onClose={() => setPreview(null)} maxWidth="lg">
-        {preview && (
-          <div className="space-y-3">
-            {preview.url && (preview.type === 'screenshot' || preview.type === 'photo') && (
-              <img src={preview.url} alt="" className="w-full rounded-xl" />
-            )}
-            {preview.url && preview.type === 'video' && (
-              <video src={preview.url} controls className="w-full rounded-xl" />
-            )}
-            <div className="flex items-center justify-between">
-              <span className="text-xs text-surface-500">{new Date(preview.timestamp).toLocaleString('ar')}</span>
-              <a href={preview.url} download className="text-primary-500 text-sm flex items-center gap-1"><Download size={14} />تحميل</a>
+      {preview && (
+        <div className="fixed inset-0 z-50 bg-black/90 backdrop-blur-sm flex flex-col" onClick={() => setPreview(null)}>
+          <div className="flex items-center justify-between px-4 py-3 shrink-0">
+            <div className="flex items-center gap-3">
+              <span className="text-sm text-white/60">{preview.index + 1} / {items.length}</span>
+              <span className="text-sm text-white/80">{new Date(preview.item.timestamp).toLocaleString('ar')}</span>
+            </div>
+            <div className="flex items-center gap-2">
+              {preview.item.url && (
+                <a href={preview.item.url} download onClick={(e) => e.stopPropagation()}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white text-sm transition-colors">
+                  <Download size={14} />تحميل
+                </a>
+              )}
+              <button onClick={(e) => { e.stopPropagation(); setPreview(null); }}
+                className="p-2 rounded-lg bg-white/10 hover:bg-white/20 text-white transition-colors">
+                <X size={18} />
+              </button>
             </div>
           </div>
-        )}
-      </Dialog>
+
+          <div className="flex-1 min-h-0 flex items-center justify-center px-4" onClick={(e) => e.stopPropagation()}>
+            {(preview.item.type === 'screenshot' || preview.item.type === 'photo') && preview.item.url && (
+              <img src={preview.item.url} alt="" className="max-h-full max-w-full object-contain rounded-lg" />
+            )}
+            {preview.item.type === 'video' && preview.item.url && (
+              <video src={preview.item.url} controls autoPlay className="max-h-full max-w-full rounded-lg" />
+            )}
+          </div>
+
+          {items.length > 1 && (
+            <div className="flex items-center justify-center gap-4 py-3 shrink-0">
+              <button onClick={(e) => { e.stopPropagation(); goPrev(); }}
+                disabled={preview.index === 0}
+                className="p-2 rounded-full bg-white/10 hover:bg-white/20 text-white disabled:opacity-30 disabled:cursor-not-allowed transition-all">
+                <ChevronRight size={20} />
+              </button>
+              <button onClick={(e) => { e.stopPropagation(); goNext(); }}
+                disabled={preview.index === items.length - 1}
+                className="p-2 rounded-full bg-white/10 hover:bg-white/20 text-white disabled:opacity-30 disabled:cursor-not-allowed transition-all">
+                <ChevronLeft size={20} />
+              </button>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
