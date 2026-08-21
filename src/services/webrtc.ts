@@ -2,6 +2,7 @@ import { sendCommandViaSocket, onSocketEvent, getSocket } from './socket';
 
 let peerConnection: RTCPeerConnection | null = null;
 let cleanupFns: (() => void)[] = [];
+let currentDeviceToken: string | null = null;
 
 const ICE_SERVERS: RTCConfiguration = {
   iceServers: [
@@ -41,6 +42,10 @@ export function initWebRTC(cbs: StreamCallbacks) {
   callbacks = cbs;
 }
 
+export function setDeviceToken(token: string) {
+  currentDeviceToken = token;
+}
+
 export function cleanupWebRTC() {
   cleanupFns.forEach((fn) => fn());
   cleanupFns = [];
@@ -48,6 +53,7 @@ export function cleanupWebRTC() {
     peerConnection.close();
     peerConnection = null;
   }
+  currentDeviceToken = null;
   callbacks = null;
 }
 
@@ -61,6 +67,7 @@ function createPeerConnection(): RTCPeerConnection {
   peerConnection.onicecandidate = (event) => {
     if (event.candidate) {
       sendCommandViaSocket('webrtc:ice', {
+        device_token: currentDeviceToken,
         candidate: event.candidate.toJSON(),
       });
     }
@@ -96,7 +103,7 @@ export function startWebRTCListener() {
   cleanupWebRTC();
 
   const unsubOffer = onSocketEvent('webrtc:offer', async (data: unknown) => {
-    const d = data as { admin_socket?: string; sdp: string; type: string; stream_type?: string };
+    const d = data as { admin_socket?: string; device_token?: string; sdp: string; type: string; stream_type?: string };
     if (!d.sdp) return;
 
     const pc = createPeerConnection();
@@ -107,6 +114,7 @@ export function startWebRTCListener() {
     await pc.setLocalDescription(answer);
 
     sendCommandViaSocket('webrtc:answer', {
+      device_token: currentDeviceToken || d.device_token,
       sdp: answer.sdp,
       type: answer.type,
     });
@@ -138,7 +146,7 @@ export function watchDevice(deviceToken: string) {
 }
 
 export function stopWebRTCStream() {
-  sendCommandViaSocket('webrtc:stop', {});
+  sendCommandViaSocket('webrtc:stop', { device_token: currentDeviceToken });
   cleanupWebRTC();
 }
 

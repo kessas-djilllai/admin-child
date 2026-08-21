@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { X, Monitor, Camera, Radio, Maximize, Minimize } from 'lucide-react';
-import { initWebRTC, startWebRTCListener, stopWebRTCStream, cleanupWebRTC, watchDevice, type StreamType } from '../../../services/webrtc';
+import { initWebRTC, startWebRTCListener, stopWebRTCStream, cleanupWebRTC, watchDevice, setDeviceToken, type StreamType } from '../../../services/webrtc';
 import { sendCommand } from '../../../services/api';
 
 interface StreamLightboxProps {
@@ -44,6 +44,7 @@ export function StreamLightbox({ open, onClose, deviceToken, streamType, title }
       onDisconnected: () => setStatus('stopped'),
     });
 
+    setDeviceToken(deviceToken);
     startWebRTCListener();
 
     // Tell the child device that an admin is watching via WebRTC
