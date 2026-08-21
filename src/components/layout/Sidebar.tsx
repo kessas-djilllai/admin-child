@@ -1,5 +1,5 @@
 import { NavLink, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Monitor, Settings, Shield, Wifi, WifiOff, ChevronLeft, ChevronRight, Terminal, Home, ArrowRight, Image } from 'lucide-react';
+import { LayoutDashboard, Monitor, Settings, Shield, Wifi, WifiOff, ChevronLeft, ChevronRight, Terminal, Home, ArrowRight, Image, Menu } from 'lucide-react';
 import { useAppStore } from '../../stores/useAppStore';
 import { useState, useEffect } from 'react';
 
@@ -23,7 +23,7 @@ const deviceTabs: DeviceTab[] = [
 ];
 
 export function Sidebar() {
-  const { isConnected } = useAppStore();
+  const { isConnected, sidebarOpen, setSidebarOpen } = useAppStore();
   const location = useLocation();
   const [collapsed, setCollapsed] = useState(false);
   const [isDeviceView, setIsDeviceView] = useState(false);
@@ -34,8 +34,12 @@ export function Sidebar() {
     setIsDeviceView(/^\/device\/.+/.test(location.pathname));
   }, [location.pathname]);
 
-  return (
-    <aside className={`fixed top-0 right-0 h-full z-40 transition-all duration-300 ${collapsed ? 'w-[72px]' : 'w-[220px]'} bg-white dark:bg-surface-950 border-l border-surface-200 dark:border-surface-800 flex flex-col`}>
+  useEffect(() => {
+    setSidebarOpen(false);
+  }, [location.pathname]);
+
+  const sidebarContent = (
+    <>
       {/* Logo */}
       <div className={`flex items-center gap-3 px-5 h-16 border-b border-surface-100 dark:border-surface-800 ${collapsed ? 'justify-center' : ''}`}>
         <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center shrink-0">
@@ -119,6 +123,33 @@ export function Sidebar() {
           )}
         </div>
       </div>
-    </aside>
+    </>
+  );
+
+  return (
+    <>
+      {/* Mobile hamburger button */}
+      <button
+        onClick={() => setSidebarOpen(!sidebarOpen)}
+        className="lg:hidden fixed top-4 right-4 z-50 p-2 rounded-xl bg-white dark:bg-surface-900 border border-surface-200 dark:border-surface-700 shadow-lg"
+      >
+        <Menu size={20} className="text-surface-700 dark:text-surface-300" />
+      </button>
+
+      {/* Desktop sidebar */}
+      <aside className={`hidden lg:flex fixed top-0 right-0 h-full z-40 transition-all duration-300 flex-col ${collapsed ? 'w-[72px]' : 'w-[220px]'} bg-white dark:bg-surface-950 border-l border-surface-200 dark:border-surface-800`}>
+        {sidebarContent}
+      </aside>
+
+      {/* Mobile overlay */}
+      {sidebarOpen && (
+        <div className="lg:hidden fixed inset-0 z-40">
+          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setSidebarOpen(false)} />
+          <aside className="absolute top-0 right-0 h-full w-[260px] bg-white dark:bg-surface-950 border-l border-surface-200 dark:border-surface-800 flex flex-col shadow-2xl">
+            {sidebarContent}
+          </aside>
+        </div>
+      )}
+    </>
   );
 }

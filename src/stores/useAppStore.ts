@@ -37,6 +37,10 @@ interface AppState {
 
   activeDeviceTab: string;
   setActiveDeviceTab: (tab: string) => void;
+
+  sidebarOpen: boolean;
+  setSidebarOpen: (v: boolean) => void;
+  toggleSidebar: () => void;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -90,4 +94,8 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   activeDeviceTab: 'commands',
   setActiveDeviceTab: (tab) => set({ activeDeviceTab: tab }),
+
+  sidebarOpen: false,
+  setSidebarOpen: (v) => set({ sidebarOpen: v }),
+  toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
 }));

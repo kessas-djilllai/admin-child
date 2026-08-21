@@ -76,12 +76,12 @@ export function DeviceDetailPage() {
   return (
     <div className="space-y-4">
       {/* Device Header */}
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-3 lg:gap-4">
         <div className="flex-1 min-w-0">
-          <h1 className="text-xl font-bold text-surface-900 dark:text-white truncate">{device.name}</h1>
-          <p className="text-xs text-surface-500 font-mono truncate">{device.token}</p>
+          <h1 className="text-lg lg:text-xl font-bold text-surface-900 dark:text-white truncate">{device.name}</h1>
+          <p className="text-[10px] lg:text-xs text-surface-500 font-mono truncate">{device.token}</p>
         </div>
-        <div className={`w-3 h-3 rounded-full ${device.isOnline ? 'bg-emerald-500' : 'bg-surface-400'}`} />
+        <div className={`w-3 h-3 rounded-full shrink-0 ${device.isOnline ? 'bg-emerald-500' : 'bg-surface-400'}`} />
       </div>
 
       {/* Content based on active tab */}
