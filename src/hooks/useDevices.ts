@@ -6,7 +6,7 @@ import { onSocketEvent } from '../services/socket';
 import type { Device } from '../types';
 
 export function useDevices() {
-  const { settings, favorites, archivedDevices, filter, searchQuery } = useAppStore();
+  const { settings, favorites, archivedDevices, filter, searchQuery, isConnected } = useAppStore();
 
   const query = useQuery({
     queryKey: ['devices', settings.serverUrl],
@@ -15,6 +15,12 @@ export function useDevices() {
     refetchInterval: 10000,
     staleTime: 5000,
   });
+
+  useEffect(() => {
+    if (isConnected) {
+      query.refetch();
+    }
+  }, [isConnected]);
 
   const [localDevices, setLocalDevices] = useState<Device[]>([]);
 

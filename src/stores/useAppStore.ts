@@ -6,6 +6,11 @@ interface AppState {
   isConnected: boolean;
   setConnected: (v: boolean) => void;
 
+  reconnecting: boolean;
+  setReconnecting: (v: boolean) => void;
+  reconnectAttempt: number;
+  setReconnectAttempt: (n: number) => void;
+
   settings: AppSettings;
   updateSettings: (s: Partial<AppSettings>) => void;
 
@@ -37,6 +42,11 @@ interface AppState {
 export const useAppStore = create<AppState>((set, get) => ({
   isConnected: false,
   setConnected: (v) => set({ isConnected: v }),
+
+  reconnecting: false,
+  setReconnecting: (v) => set({ reconnecting: v }),
+  reconnectAttempt: 0,
+  setReconnectAttempt: (n) => set({ reconnectAttempt: n }),
 
   settings: storage.getSettings(),
   updateSettings: (s) => {

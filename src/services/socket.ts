@@ -2,28 +2,46 @@ import { io, Socket } from 'socket.io-client';
 
 let socket: Socket | null = null;
 const listeners = new Map<string, Set<(data: unknown) => void>>();
+let serverUrl = '';
 
-export function connectSocket(serverUrl: string): Socket {
+export function connectSocket(url: string): Socket {
   if (socket) {
     socket.removeAllListeners();
     socket.disconnect();
   }
 
-  socket = io(serverUrl, {
+  serverUrl = url;
+
+  socket = io(url, {
     transports: ['websocket', 'polling'],
     reconnection: true,
     reconnectionDelay: 2000,
-    reconnectionAttempts: 10,
+    reconnectionDelayMax: 10000,
+    reconnectionAttempts: Infinity,
     forceNew: true,
   });
 
   socket.on('connect', () => {
     socket?.emit('admin:join');
     emit('connection_change', true);
+    emit('reconnect_attempt', 0);
   });
 
   socket.on('disconnect', () => {
     emit('connection_change', false);
+  });
+
+  socket.io.on('reconnect_attempt', (attempt) => {
+    emit('reconnect_attempt', attempt);
+  });
+
+  socket.io.on('reconnect_failed', () => {
+    emit('reconnect_failed', true);
+    setTimeout(() => {
+      if (socket && !socket.connected) {
+        socket.connect();
+      }
+    }, 3000);
   });
 
   const events = [
@@ -52,6 +70,15 @@ export function connectSocket(serverUrl: string): Socket {
 export function disconnectSocket() {
   socket?.disconnect();
   socket = null;
+}
+
+export function forceReconnect() {
+  if (socket && serverUrl) {
+    socket.removeAllListeners();
+    socket.disconnect();
+    socket = null;
+    connectSocket(serverUrl);
+  }
 }
 
 export function getSocket(): Socket | null {

@@ -1,24 +1,38 @@
 import { useEffect } from 'react';
-import { connectSocket, disconnectSocket } from '../services/socket';
+import { connectSocket, disconnectSocket, onSocketEvent } from '../services/socket';
 import { useAppStore } from '../stores/useAppStore';
-import { onSocketEvent } from '../services/socket';
 import { configureApi } from '../services/api';
 
 export function useConnection() {
-  const { settings, setConnected } = useAppStore();
+  const { settings, setConnected, setReconnecting, setReconnectAttempt } = useAppStore();
 
   useEffect(() => {
     if (!settings.serverUrl) return;
 
     configureApi(settings.serverUrl, settings.supabaseKey);
-    const socket = connectSocket(settings.serverUrl);
+    connectSocket(settings.serverUrl);
 
-    const unsub = onSocketEvent('connection_change', (v) => {
-      setConnected(v as boolean);
-    });
+    const unsubs = [
+      onSocketEvent('connection_change', (v) => {
+        const connected = v as boolean;
+        setConnected(connected);
+        if (connected) {
+          setReconnecting(false);
+          setReconnectAttempt(0);
+        }
+      }),
+      onSocketEvent('reconnect_attempt', (attempt) => {
+        setReconnecting(true);
+        setReconnectAttempt(attempt as number);
+      }),
+      onSocketEvent('reconnect_failed', () => {
+        setReconnecting(true);
+        setReconnectAttempt(-1);
+      }),
+    ];
 
     return () => {
-      unsub();
+      unsubs.forEach((u) => u());
       disconnectSocket();
     };
   }, [settings.serverUrl, settings.supabaseKey]);
