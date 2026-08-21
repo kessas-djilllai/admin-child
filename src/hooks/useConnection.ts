@@ -19,6 +19,9 @@ export function useConnection() {
         if (connected) {
           setReconnecting(false);
           setReconnectAttempt(0);
+        } else {
+          setReconnecting(true);
+          setReconnectAttempt(1);
         }
       }),
       onSocketEvent('reconnect_attempt', (attempt) => {

