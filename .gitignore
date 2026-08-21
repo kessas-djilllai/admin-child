@@ -11,3 +11,13 @@ gradle/
 *.gradle
 .gradle/
 local.properties
+build.gradle.kts
+settings.gradle.kts
+gradle.properties
+gradlew
+gradlew.bat
+metadata.json
+funs.txt
+temp.txt
+README.md
+.github/
