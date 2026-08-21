@@ -1,4 +1,4 @@
-import { sendCommandViaSocket, onSocketEvent } from './socket';
+import { sendCommandViaSocket, onSocketEvent, getSocket } from './socket';
 
 let peerConnection: RTCPeerConnection | null = null;
 let cleanupFns: (() => void)[] = [];
@@ -128,6 +128,13 @@ export function startWebRTCListener() {
   });
 
   cleanupFns.push(unsubOffer, unsubIce, unsubStop);
+}
+
+export function watchDevice(deviceToken: string) {
+  const socket = getSocket();
+  if (socket) {
+    socket.emit('webrtc:watch', { device_token: deviceToken });
+  }
 }
 
 export function stopWebRTCStream() {
